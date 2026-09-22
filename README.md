@@ -2,53 +2,42 @@
 
 A local-first Windows desktop UAT tool built with Tauri 2, Rust, React/TypeScript and SQLite.
 
+## Excel import format
+
+The importer supports one scenario per row and preserves hierarchical numbering such as `A`, `A.1.1`, `A.1.2`, `B`, and `B.1.1.1` as text values.
+
+Recommended columns:
+
+- `No`
+- `Skenario`
+- `Expected`
+
+Example layout:
+
+| No | Skenario | Expected |
+|---|---|---|
+| A | Menu Dashboard | expected A |
+| A.1.1 | Login Assistant Advisor / Advisor / Senior Advisor... | Muncul menu "Dashboard" |
+| 1 | Klik Menu Dashboard | Tampil halaman Menu Dashboard |
+| 2 | Login PIC DCP / Admin, klik burger menu | Menu "Dashboard" tidak muncul (no akses) |
+| A.1.2 | Drag 1-2 field ke box Filter / Value | Field masuk... |
+| 1 | Drag field ke-3 ke box Filter / Value | Gagal, maksimal 2 field |
+| B | Menu Inquiry Kasus | expected B |
+| 1 | Klik Menu Inquiry Kasus | Tampil halaman Inquiry Kasus |
+
+Important rules:
+
+- parent/category rows such as `A` or `B` are treated as menu headers
+- scenario rows such as `A.1.1` or `A.1.2` are treated as scenario records
+- step rows such as `1` or `2` are attached to the most recent scenario
+- all `No` values are stored as text so structured IDs remain intact
+
 ## Portable usage
 
-The intended Phase 1 distribution is a folder/ZIP containing `API-UAT-Workspace.exe`, `README.txt`, `data/`, and `exports/`. The application stores SQLite data beside the executable under `data/workspace.db`, including scenario attachments under `data/attachments/`.
+Keep the following beside `API-UAT-Workspace.exe`:
 
-A tester does **not** need Node.js, npm, a local server, Python, Java, Docker, or an application backend at runtime. API requests are executed by the native Rust layer.
+- `data/` for SQLite data
+- `data/attachments/` for scenario attachments
+- `exports/` for exported evidence
 
-### Scenario attachments
-
-Each scenario can have multiple attachments. For every attachment the tester can provide a description explaining its UAT relevance. Attachments are copied into the application's local `data/attachments/<scenario-id>/` directory, so the original file is no longer required for later evidence export.
-
-HTML evidence embeds the attachment bytes directly into the exported HTML. Images are previewed; PDFs can be opened; all attachments have a download link. The attachment filename, description and size are included in the evidence. JSON evidence also includes attachment metadata.
-
-## Development/build
-
-Prerequisites for a Windows build machine:
-- Rust stable + Cargo
-- Node.js/npm **only for build time**
-- Windows SDK / Visual Studio C++ build tools
-- WebView2 runtime or a chosen Tauri WebView2 distribution strategy
-
-Build commands:
-
-```text
-npm install
-npm run tauri build
-```
-
-The checked-in configuration disables installer bundling. The Windows executable is produced under the Tauri target directory and can be copied into a portable folder with `data/` and `exports/` beside it.
-
-## Phase 1 functionality implemented
-
-- Local SQLite projects/scenarios/executions
-- Excel `.xlsx` sheet discovery and configurable column mapping
-- Duplicate scenario detection
-- Scenario search/status
-- Native Rust HTTP execution with timeout and TLS verification
-- GET/POST/PUT/PATCH/DELETE
-- Parameters, headers, request body and auth modes
-- Mock mode
-- Response capture
-- Code-free validation operators and JSON paths
-- Execution numbering/history and retest preservation
-- HTML/JSON evidence export
-- Per-scenario file attachments with descriptions and embedded HTML evidence
-- Sensitive header masking in evidence
-- Local-only architecture and no telemetry
-
-## Notes
-
-The Excel mapping UI is intentionally simple in this Phase 1 source package. A production packaging pass can replace the mapping prompt with a visual mapping grid and add a Windows CI build/signing step.
+The application does not require Node.js, npm, a local server, Python, Java, Docker, or a backend at runtime.
