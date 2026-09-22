@@ -21,10 +21,52 @@ struct Db(pub Mutex<Connection>);
 #[derive(Serialize,Deserialize,Clone)] struct Resp{status:u16,headers:HashMap<String,String>,body:String,elapsed_ms:u128,size:usize,timestamp:String,error_type:Option<String>,error:Option<String>}
 fn db(app:&AppHandle)->Result<Connection,String>{let exe=std::env::current_exe().map_err(|e|e.to_string())?; let root=exe.parent().ok_or("Cannot locate application directory")?.join("data"); fs::create_dir_all(&root).map_err(|e|e.to_string())?; let p=root.join("workspace.db"); let c=Connection::open(p).map_err(|e|e.to_string())?; init(&c)?; Ok(c)}
 fn init(c:&Connection)->Result<(),String>{c.execute_batch(r#"PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS scenarios(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id INTEGER NOT NULL,scenario_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',test_step TEXT NOT NULL DEFAULT '',expected_result TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'NOT EXECUTED',favorite INTEGER NOT NULL DEFAULT 0,last_execution TEXT,UNIQUE(project_id,scenario_id),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS scenario_requests(scenario_id INTEGER PRIMARY KEY,method TEXT,url TEXT,params_json TEXT,headers_json TEXT,body TEXT,auth TEXT,FOREIGN KEY(scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS validation_rules(id INTEGER PRIMARY KEY AUTOINCREMENT,scenario_id INTEGER,target TEXT,operator TEXT,expected TEXT,enabled INTEGER DEFAULT 1,FOREIGN KEY(scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS executions(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id INTEGER,scenario_id INTEGER,execution_number INTEGER,tester TEXT,created_at TEXT,final_result TEXT,FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(scenario_id) REFERENCES scenarios(id)); CREATE TABLE IF NOT EXISTS execution_requests(execution_id INTEGER PRIMARY KEY,method TEXT,url TEXT,params_json TEXT,headers_json TEXT,body TEXT,auth TEXT); CREATE TABLE IF NOT EXISTS execution_responses(execution_id INTEGER PRIMARY KEY,status INTEGER,headers_json TEXT,body TEXT,elapsed_ms INTEGER,size INTEGER,timestamp TEXT,error_type TEXT,error TEXT); CREATE TABLE IF NOT EXISTS validation_results(id INTEGER PRIMARY KEY AUTOINCREMENT,execution_id INTEGER,target TEXT,operator TEXT,expected TEXT,actual_json TEXT,passed INTEGER); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE IF NOT EXISTS scenario_attachments(id INTEGER PRIMARY KEY AUTOINCREMENT,scenario_id INTEGER NOT NULL,file_name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',relative_path TEXT NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE);"#).map_err(|e|e.to_string())}
-#[tauri::command] fn list_projects(state:State<Db>)->Result<Vec<Project>,String>{let c=state.0.lock().unwrap();let mut st=c.prepare("SELECT id,name,description FROM projects ORDER BY name").map_err(|e|e.to_string())?;Ok(st.query_map([],|r|Ok(Project{id:r.get(0)?,name:r.get(1)?,description:r.get(2)?})).map_err(|e|e.to_string())?.filter_map(Result::ok).collect())}
+#[tauri::command]
+fn list_projects(state: State<Db>) -> Result<Vec<Project>, String> {
+    let c = state.0.lock().unwrap();
+    let mut st = c.prepare("SELECT id,name,description FROM projects ORDER BY name").map_err(|e| e.to_string())?;
+    let rows = st.query_map([], |r| Ok(Project {
+        id: r.get(0)?, name: r.get(1)?, description: r.get(2)?
+    })).map_err(|e| e.to_string())?;
+    let projects: Vec<Project> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(projects)
+}
 #[tauri::command] fn create_project(state:State<Db>,name:String,description:String)->Result<i64,String>{let c=state.0.lock().unwrap();c.execute("INSERT INTO projects(name,description,created_at) VALUES(?,?,?)",params![name,description,Utc::now().to_rfc3339()]).map_err(|e|e.to_string())?;Ok(c.last_insert_rowid())}
-#[tauri::command] fn list_scenarios(state:State<Db>,project_id:i64)->Result<Vec<Value>,String>{let c=state.0.lock().unwrap();let mut st=c.prepare("SELECT id,scenario_id,name,test_step,expected_result,status,favorite,last_execution FROM scenarios WHERE project_id=? ORDER BY scenario_id").map_err(|e|e.to_string())?;let rows=st.query_map([project_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"scenario_id":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"test_step":r.get::<_,String>(3)?,"expected_result":r.get::<_,String>(4)?,"status":r.get::<_,String>(5)?,"favorite":r.get::<_,i64>(6)?!=0,"last_execution":r.get::<_,Option<String>>(7)?}))).map_err(|e|e.to_string())?;Ok(rows.filter_map(Result::ok).collect())}
-#[tauri::command] fn get_scenario(state:State<Db>,scenario_id:i64)->Result<Value,String>{let c=state.0.lock().unwrap();let req=c.query_row("SELECT method,url,params_json,headers_json,body,auth FROM scenario_requests WHERE scenario_id=?",[scenario_id],|r|Ok(json!({"method":r.get::<_,String>(0)?,"url":r.get::<_,String>(1)?,"params":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!([])),"headers":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!([])),"body":r.get::<_,String>(4)?,"auth":r.get::<_,String>(5)?}))).unwrap_or(json!({}));let mut st=c.prepare("SELECT id,target,operator,expected,enabled FROM validation_rules WHERE scenario_id=? ORDER BY id").map_err(|e|e.to_string())?;let rules=st.query_map([scenario_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"target":r.get::<_,String>(1)?,"operator":r.get::<_,String>(2)?,"expected":r.get::<_,String>(3)?,"enabled":r.get::<_,i64>(4)?!=0}))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect::<Vec<_>>();Ok(json!({"request":req,"rules":rules}))}
+#[tauri::command]
+fn list_scenarios(state: State<Db>, project_id: i64) -> Result<Vec<Value>, String> {
+    let c = state.0.lock().unwrap();
+    let mut st = c.prepare("SELECT id,scenario_id,name,test_step,expected_result,status,favorite,last_execution FROM scenarios WHERE project_id=? ORDER BY scenario_id").map_err(|e| e.to_string())?;
+    let rows = st.query_map([project_id], |r| Ok(json!({
+        "id": r.get::<_, i64>(0)?, "scenario_id": r.get::<_, String>(1)?,
+        "name": r.get::<_, String>(2)?, "test_step": r.get::<_, String>(3)?,
+        "expected_result": r.get::<_, String>(4)?, "status": r.get::<_, String>(5)?,
+        "favorite": r.get::<_, i64>(6)? != 0, "last_execution": r.get::<_, Option<String>>(7)?
+    }))).map_err(|e| e.to_string())?;
+    let scenarios: Vec<Value> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(scenarios)
+}
+#[tauri::command]
+fn get_scenario(state: State<Db>, scenario_id: i64) -> Result<Value, String> {
+    let c = state.0.lock().unwrap();
+    let req = c.query_row(
+        "SELECT method,url,params_json,headers_json,body,auth FROM scenario_requests WHERE scenario_id=?",
+        [scenario_id],
+        |r| Ok(json!({
+            "method": r.get::<_, String>(0)?, "url": r.get::<_, String>(1)?,
+            "params": serde_json::from_str::<Value>(&r.get::<_, String>(2)?).unwrap_or(json!([])),
+            "headers": serde_json::from_str::<Value>(&r.get::<_, String>(3)?).unwrap_or(json!([])),
+            "body": r.get::<_, String>(4)?, "auth": r.get::<_, String>(5)?
+        }))
+    ).unwrap_or(json!({}));
+    let mut st = c.prepare("SELECT id,target,operator,expected,enabled FROM validation_rules WHERE scenario_id=? ORDER BY id").map_err(|e| e.to_string())?;
+    let rows = st.query_map([scenario_id], |r| Ok(json!({
+        "id": r.get::<_, i64>(0)?, "target": r.get::<_, String>(1)?,
+        "operator": r.get::<_, String>(2)?, "expected": r.get::<_, String>(3)?,
+        "enabled": r.get::<_, i64>(4)? != 0
+    }))).map_err(|e| e.to_string())?;
+    let rules: Vec<Value> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(json!({"request": req, "rules": rules}))
+}
 #[tauri::command] fn inspect_excel(path:String)->Result<Value,String>{let mut wb=open_workbook_auto(&path).map_err(|e|format!("Excel import failed: {e}"))?;let sheets=wb.sheet_names().to_vec();Ok(json!({"sheets":sheets}))}
 #[derive(Deserialize)] struct Mapping{scenario_id:String,name:Option<String>,test_step:Option<String>,expected_result:Option<String>}
 #[tauri::command] fn import_excel(state:State<Db>,project_id:i64,path:String,sheet:String,mapping:Mapping)->Result<Value,String>{let mut wb=open_workbook_auto(&path).map_err(|e|e.to_string())?;let range=wb.worksheet_range(&sheet).map_err(|e|e.to_string())?;let mut it=range.rows();let headers=it.next().ok_or("Sheet is empty")?;let names:Vec<String>=headers.iter().map(|d|d.to_string()).collect();let idx=|x:&str|names.iter().position(|n|n.eq_ignore_ascii_case(x)).ok_or_else(||format!("Column not found: {x}"));let sid=idx(&mapping.scenario_id)?;let ni=mapping.name.as_deref().and_then(|x|idx(x).ok());let ti=mapping.test_step.as_deref().and_then(|x|idx(x).ok());let ei=mapping.expected_result.as_deref().and_then(|x|idx(x).ok());let c=state.0.lock().unwrap();let tx=c.unchecked_transaction().map_err(|e|e.to_string())?;let mut imported=0;let mut dup=Vec::new();for row in it{let get=|i:Option<usize>|i.and_then(|j|row.get(j)).map(|d|d.to_string()).unwrap_or_default();let sc=row.get(sid).map(|d|d.to_string()).unwrap_or_default();if sc.trim().is_empty(){continue}let name=ni.map(|i|get(Some(i))).unwrap_or_default();let step=ti.map(|i|get(Some(i))).unwrap_or_default();let exp=ei.map(|i|get(Some(i))).unwrap_or_default();let r=tx.execute("INSERT OR IGNORE INTO scenarios(project_id,scenario_id,name,test_step,expected_result) VALUES(?,?,?,?,?)",params![project_id,sc,name,step,exp]).map_err(|e|e.to_string())?;if r==0{dup.push(sc)}else{imported+=1}}tx.commit().map_err(|e|e.to_string())?;Ok(json!({"imported":imported,"duplicates":dup,"headers":names}))}
@@ -36,22 +78,137 @@ fn redact_headers(h:&[Header])->HashMap<String,String>{h.iter().filter(|x|x.enab
 fn mask(k:&str,v:&str)->String{if Regex::new("(?i)authorization|cookie|set-cookie|api[-_]?key|token|password|secret").unwrap().is_match(k){"********".into()}else{v.into()}}
 #[tauri::command] async fn execute_request(request:RequestDef,mock:bool)->Result<Resp,String>{let start=Instant::now();if mock{return Ok(Resp{status:200,headers:HashMap::from([(String::from("content-type"),String::from("application/json"))]),body:json!({"status":"SUCCESS","data":{"customerId":123456,"customer":{"name":"Demo Customer"}},"message":"success"}).to_string(),elapsed_ms:342,size:112,timestamp:Utc::now().to_rfc3339(),error_type:None,error:None})}let client=Client::builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|e|e.to_string())?;let m=Method::from_bytes(request.method.as_bytes()).map_err(|e|e.to_string())?;let mut url=reqwest::Url::parse(&request.url).map_err(|e|format!("Invalid URL: {e}"))?;{let mut qp=url.query_pairs_mut();for p in request.params.iter().filter(|p|p.enabled){qp.append_pair(&p.key,&p.value)}}let mut b=client.request(m,url);for h in request.headers.iter().filter(|h|h.enabled){b=b.header(&h.key,&h.value)}match request.auth.as_str(){"Bearer Token"=>{b=b.bearer_auth(request.token)},"Basic Auth"=>{b=b.basic_auth(request.basicUser,Some(request.basicPass))},"API Key"=>{b=b.header("X-API-Key",request.apiKey)},_=>{}}if !request.body.is_empty(){b=b.body(request.body)}match b.send().await{Ok(r)=>{let status=r.status().as_u16();let headers=r.headers().iter().map(|(k,v)|(k.to_string(),v.to_str().unwrap_or("").to_string())).collect();match r.text().await{Ok(body)=>Ok(Resp{status,headers,body:body.clone(),elapsed_ms:start.elapsed().as_millis(),size:body.len(),timestamp:Utc::now().to_rfc3339(),error_type:None,error:None}),Err(e)=>Ok(Resp{status,headers,body:String::new(),elapsed_ms:start.elapsed().as_millis(),size:0,timestamp:Utc::now().to_rfc3339(),error_type:Some("HTTP FAILURE".into()),error:Some(e.to_string())})}},Err(e)=>{let et=if e.is_timeout(){"REQUEST ERROR: TIMEOUT"}else if e.is_connect(){"REQUEST ERROR: CONNECTION"}else{"REQUEST ERROR"};Ok(Resp{status:0,headers:HashMap::new(),body:String::new(),elapsed_ms:start.elapsed().as_millis(),size:0,timestamp:Utc::now().to_rfc3339(),error_type:Some(et.into()),error:Some(e.to_string())})}}}
 #[tauri::command] fn record_execution(state:State<Db>,project_id:i64,scenario_id:i64,request:RequestDef,response:Resp,validation:Value)->Result<i64,String>{let c=state.0.lock().unwrap();let tx=c.unchecked_transaction().map_err(|e|e.to_string())?;let n:i64=tx.query_row("SELECT COALESCE(MAX(execution_number),0)+1 FROM executions WHERE scenario_id=?",[scenario_id],|r|r.get(0)).map_err(|e|e.to_string())?;let final_result=validation["final_result"].as_str().unwrap_or("FAIL");tx.execute("INSERT INTO executions(project_id,scenario_id,execution_number,tester,created_at,final_result) VALUES(?,?,?,?,?,?)",params![project_id,scenario_id,n,"UAT Tester",Utc::now().to_rfc3339(),final_result]).map_err(|e|e.to_string())?;let id=tx.last_insert_rowid();tx.execute("INSERT INTO execution_requests VALUES(?,?,?,?,?,?,?)",params![id,request.method,request.url,serde_json::to_string(&request.params).unwrap(),serde_json::to_string(&request.headers).unwrap(),request.body,request.auth]).map_err(|e|e.to_string())?;tx.execute("INSERT INTO execution_responses VALUES(?,?,?,?,?,?,?,?,?,?)",params![id,response.status,serde_json::to_string(&response.headers).unwrap(),response.body,response.elapsed_ms as i64,response.size as i64,response.timestamp,response.error_type,response.error]).map_err(|e|e.to_string())?;for r in validation["rules"].as_array().unwrap_or(&vec![]){tx.execute("INSERT INTO validation_results(execution_id,target,operator,expected,actual_json,passed) VALUES(?,?,?,?,?,?)",params![id,r["target"],r["operator"],r["expected"],r["actual"].to_string(),r["result"].as_bool().unwrap_or(false)]).ok();}tx.execute("UPDATE scenarios SET status=?,last_execution=? WHERE id=?",params![final_result,Utc::now().to_rfc3339(),scenario_id]).map_err(|e|e.to_string())?;tx.commit().map_err(|e|e.to_string())?;Ok(id)}
-#[tauri::command] fn list_executions(state:State<Db>,scenario_id:i64)->Result<Vec<Value>,String>{let c=state.0.lock().unwrap();let mut st=c.prepare("SELECT id,execution_number,tester,created_at,final_result FROM executions WHERE scenario_id=? ORDER BY execution_number DESC").map_err(|e|e.to_string())?;Ok(st.query_map([scenario_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"execution_number":r.get::<_,i64>(1)?,"tester":r.get::<_,String>(2)?,"created_at":r.get::<_,String>(3)?,"final_result":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect())}
+#[tauri::command]
+fn list_executions(state: State<Db>, scenario_id: i64) -> Result<Vec<Value>, String> {
+    let c = state.0.lock().unwrap();
+    let mut st = c.prepare("SELECT id,execution_number,tester,created_at,final_result FROM executions WHERE scenario_id=? ORDER BY execution_number DESC").map_err(|e| e.to_string())?;
+    let rows = st.query_map([scenario_id], |r| Ok(json!({
+        "id": r.get::<_, i64>(0)?, "execution_number": r.get::<_, i64>(1)?,
+        "tester": r.get::<_, String>(2)?, "created_at": r.get::<_, String>(3)?,
+        "final_result": r.get::<_, String>(4)?
+    }))).map_err(|e| e.to_string())?;
+    let executions: Vec<Value> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(executions)
+}
 
 fn app_root() -> Result<PathBuf,String>{let exe=std::env::current_exe().map_err(|e|e.to_string())?;Ok(exe.parent().ok_or("Cannot locate application directory")?.to_path_buf())}
 fn attachments_root()->Result<PathBuf,String>{let p=app_root()?.join("data").join("attachments");fs::create_dir_all(&p).map_err(|e|e.to_string())?;Ok(p)}
 fn safe_file_name(name:&str)->String{name.chars().map(|c|if c.is_ascii_alphanumeric()||matches!(c,'.'|'_'|'-'|' ') {c}else{'_'}).collect()}
 fn mime_for(name:&str)->&'static str{match Path::new(name).extension().and_then(|x|x.to_str()).unwrap_or("").to_ascii_lowercase().as_str(){"png"=>"image/png","jpg"|"jpeg"=>"image/jpeg","gif"=>"image/gif","webp"=>"image/webp","svg"=>"image/svg+xml","pdf"=>"application/pdf","txt"=>"text/plain","json"=>"application/json","csv"=>"text/csv","html"|"htm"=>"text/html","xml"=>"application/xml","zip"=>"application/zip",_=>"application/octet-stream"}}
 #[tauri::command] fn add_attachment(state:State<Db>,scenario_id:i64,path:String,description:String)->Result<Attachment,String>{let src=PathBuf::from(&path);if !src.is_file(){return Err("Attachment file not found".into())}let name=safe_file_name(src.file_name().and_then(|x|x.to_str()).unwrap_or("attachment"));let bytes=fs::read(&src).map_err(|e|e.to_string())?;let root=attachments_root()?.join(scenario_id.to_string());fs::create_dir_all(&root).map_err(|e|e.to_string())?;let stamp=Utc::now().timestamp_nanos_opt().unwrap_or(0);let stored=format!("{}_{}",stamp,name);fs::write(root.join(&stored),&bytes).map_err(|e|e.to_string())?;let rel=format!("attachments/{}/{}",scenario_id,stored);let c=state.0.lock().unwrap();c.execute("INSERT INTO scenario_attachments(scenario_id,file_name,description,relative_path,size,created_at) VALUES(?,?,?,?,?,?)",params![scenario_id,name,description,rel,bytes.len() as i64,Utc::now().to_rfc3339()]).map_err(|e|e.to_string())?;let id=c.last_insert_rowid();Ok(Attachment{id,file_name:name,description, size:bytes.len() as i64,relative_path:rel,created_at:Utc::now().to_rfc3339()})}
-#[tauri::command] fn list_attachments(state:State<Db>,scenario_id:i64)->Result<Vec<Attachment>,String>{let c=state.0.lock().unwrap();let mut st=c.prepare("SELECT id,file_name,description,size,relative_path,created_at FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e|e.to_string())?;Ok(st.query_map([scenario_id],|r|Ok(Attachment{id:r.get(0)?,file_name:r.get(1)?,description:r.get(2)?,size:r.get(3)?,relative_path:r.get(4)?,created_at:r.get(5)?})).map_err(|e|e.to_string())?.filter_map(Result::ok).collect())}
+#[tauri::command]
+fn list_attachments(state: State<Db>, scenario_id: i64) -> Result<Vec<Attachment>, String> {
+    let c = state.0.lock().unwrap();
+    let mut st = c.prepare("SELECT id,file_name,description,size,relative_path,created_at FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e| e.to_string())?;
+    let rows = st.query_map([scenario_id], |r| Ok(Attachment {
+        id: r.get(0)?, file_name: r.get(1)?, description: r.get(2)?,
+        size: r.get(3)?, relative_path: r.get(4)?, created_at: r.get(5)?
+    })).map_err(|e| e.to_string())?;
+    let attachments: Vec<Attachment> = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(attachments)
+}
 #[tauri::command] fn update_attachment_description(state:State<Db>,id:i64,description:String)->Result<(),String>{let c=state.0.lock().unwrap();c.execute("UPDATE scenario_attachments SET description=? WHERE id=?",params![description,id]).map_err(|e|e.to_string())?;Ok(())}
 #[tauri::command] fn remove_attachment(state:State<Db>,id:i64)->Result<(),String>{let c=state.0.lock().unwrap();let rel:Option<String>=c.query_row("SELECT relative_path FROM scenario_attachments WHERE id=?",[id],|r|r.get(0)).ok();c.execute("DELETE FROM scenario_attachments WHERE id=?",[id]).map_err(|e|e.to_string())?;if let Some(r)=rel{let _=fs::remove_file(app_root()?.join("data").join(r));}Ok(())}
 fn html_escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;")}
-#[tauri::command] fn export_evidence(state:State<Db>,execution_id:i64,path:String)->Result<String,String>{if path.is_empty(){return Ok(String::new())}let c=state.0.lock().unwrap();let (sid,eno,tester,created,result):(i64,i64,String,String,String)=c.query_row("SELECT scenario_id,execution_number,tester,created_at,final_result FROM executions WHERE id=?",[execution_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;let (method,url,params,headers,body):(String,String,String,String,String)=c.query_row("SELECT method,url,params_json,headers_json,body FROM execution_requests WHERE execution_id=?",[execution_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;let (status,rh,rb,ms,size):(i64,String,String,i64,i64)=c.query_row("SELECT status,headers_json,body,elapsed_ms,size FROM execution_responses WHERE execution_id=?",[execution_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;let scenario:String=c.query_row("SELECT scenario_id||' — '||name FROM scenarios WHERE id=?",[sid],|r|r.get(0)).map_err(|e|e.to_string())?;let mut ast=c.prepare("SELECT file_name,description,relative_path,size FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e|e.to_string())?;let mut attachments_html=String::new();for a in ast.query_map([sid],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?))).map_err(|e|e.to_string())?.filter_map(Result::ok){let (name,desc,rel,sz)=a;let full=app_root()?.join("data").join(&rel);let bytes=fs::read(&full).map_err(|e|e.to_string())?;let mime=mime_for(&name);let b64=general_purpose::STANDARD.encode(bytes);let href=format!("data:{};base64,{}",mime,b64);let preview=if mime.starts_with("image/"){format!("<img src='{}' style='max-width:520px;max-height:360px;border:1px solid #d7dce5;border-radius:8px;margin-top:8px' alt='{}'/>",href,html_escape(&name))}else if mime=="application/pdf"{format!("<a href='{}' target='_blank'>Open PDF</a>",href)}else{"".to_string()};attachments_html.push_str(&format!("<article class='attachment'><div><b>{}</b> <span class='muted'>({} bytes)</span></div><p>{}</p>{}<p><a download='{}' href='{}'>Download attachment</a></p></article>",html_escape(&name),sz,html_escape(&desc),preview,html_escape(&name),href));}let html=format!("<!doctype html><html><head><meta charset='utf-8'><title>UAT Evidence</title><style>body{{font-family:Segoe UI,Arial;margin:36px;color:#172033;background:#fff}}h1{{color:#10233f}}h2{{border-bottom:1px solid #ddd;padding-bottom:6px}}pre{{background:#f4f6f9;padding:14px;white-space:pre-wrap;overflow:auto}}.ok{{color:#17703b}}.fail{{color:#a12424}}.attachment{{border:1px solid #d7dce5;border-radius:10px;padding:14px;margin:10px 0}}.muted{{color:#667085}}a{{color:#155eef}}</style></head><body><h1>API UAT Evidence</h1><p><b>Scenario:</b> {}<br><b>Execution:</b> #{}<br><b>Tester:</b> {}<br><b>Date:</b> {}<br><b>Final Result:</b> <span class='{}'>{}</span></p><h2>Request</h2><p>{} {}</p><p><b>Parameters</b></p><pre>{}</pre><p><b>Headers</b></p><pre>{}</pre><p><b>Body</b></p><pre>{}</pre><h2>Response</h2><p>HTTP {} • {} ms • {} bytes</p><pre>{}</pre><h2>Validation</h2><pre>{}</pre><h2>Scenario Attachments</h2>{}</body></html>",html_escape(&scenario),eno,html_escape(&tester),html_escape(&created),if result=="PASS"{"ok"}else{"fail"},result,method,html_escape(&url),html_escape(&params),html_escape(&redact_json_headers(&headers)),html_escape(&body),status,ms,size,html_escape(&rb),html_escape(&validation_html(&c,execution_id)),if attachments_html.is_empty(){"<p>No attachments.</p>".to_string()}else{attachments_html});fs::write(&path,html).map_err(|e|e.to_string())?;Ok(path)}
+#[tauri::command]
+fn export_evidence(state: State<Db>, execution_id: i64, path: String) -> Result<String, String> {
+    if path.is_empty() { return Ok(String::new()); }
+    let c = state.0.lock().unwrap();
+    let (sid, eno, tester, created, result): (i64, i64, String, String, String) = c.query_row(
+        "SELECT scenario_id,execution_number,tester,created_at,final_result FROM executions WHERE id=?",
+        [execution_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    ).map_err(|e| e.to_string())?;
+    let (method, url, params, headers, body): (String, String, String, String, String) = c.query_row(
+        "SELECT method,url,params_json,headers_json,body FROM execution_requests WHERE execution_id=?",
+        [execution_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    ).map_err(|e| e.to_string())?;
+    let (status, _rh, rb, ms, size): (i64, String, String, i64, i64) = c.query_row(
+        "SELECT status,headers_json,body,elapsed_ms,size FROM execution_responses WHERE execution_id=?",
+        [execution_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    ).map_err(|e| e.to_string())?;
+    let scenario: String = c.query_row("SELECT scenario_id||' — '||name FROM scenarios WHERE id=?", [sid], |r| r.get(0)).map_err(|e| e.to_string())?;
+
+    let mut ast = c.prepare("SELECT file_name,description,relative_path,size FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e| e.to_string())?;
+    let attachment_rows = ast.query_map([sid], |r| Ok((
+        r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?
+    ))).map_err(|e| e.to_string())?;
+    let attachment_values: Vec<Result<(String, String, String, i64), rusqlite::Error>> = attachment_rows.collect();
+    drop(ast);
+    let mut attachments_html = String::new();
+    for a in attachment_values {
+        let (name, desc, rel, sz) = a.map_err(|e| e.to_string())?;
+        let full = app_root()?.join("data").join(&rel);
+        let bytes = fs::read(&full).map_err(|e| e.to_string())?;
+        let mime = mime_for(&name);
+        let b64 = general_purpose::STANDARD.encode(bytes);
+        let href = format!("data:{};base64,{}", mime, b64);
+        let preview = if mime.starts_with("image/") {
+            format!("<img src='{}' style='max-width:520px;max-height:360px;border:1px solid #d7dce5;border-radius:8px;margin-top:8px' alt='{}'/>", href, html_escape(&name))
+        } else if mime == "application/pdf" {
+            format!("<a href='{}' target='_blank'>Open PDF</a>", href)
+        } else { String::new() };
+        attachments_html.push_str(&format!("<article class='attachment'><div><b>{}</b> <span class='muted'>({} bytes)</span></div><p>{}</p>{}<p><a download='{}' href='{}'>Download attachment</a></p></article>", html_escape(&name), sz, html_escape(&desc), preview, html_escape(&name), href));
+    }
+    let validation_text = validation_html(&c, execution_id);
+    let html = format!("<!doctype html><html><head><meta charset='utf-8'><title>UAT Evidence</title><style>body{{font-family:Segoe UI,Arial;margin:36px;color:#172033;background:#fff}}h1{{color:#10233f}}h2{{border-bottom:1px solid #ddd;padding-bottom:6px}}pre{{background:#f4f6f9;padding:14px;white-space:pre-wrap;overflow:auto}}.ok{{color:#17703b}}.fail{{color:#a12424}}.attachment{{border:1px solid #d7dce5;border-radius:10px;padding:14px;margin:10px 0}}.muted{{color:#667085}}a{{color:#155eef}}</style></head><body><h1>API UAT Evidence</h1><p><b>Scenario:</b> {}<br><b>Execution:</b> #{}<br><b>Tester:</b> {}<br><b>Date:</b> {}<br><b>Final Result:</b> <span class='{}'>{}</span></p><h2>Request</h2><p>{} {}</p><p><b>Parameters</b></p><pre>{}</pre><p><b>Headers</b></p><pre>{}</pre><p><b>Body</b></p><pre>{}</pre><h2>Response</h2><p>HTTP {} • {} ms • {} bytes</p><pre>{}</pre><h2>Validation</h2><pre>{}</pre><h2>Scenario Attachments</h2>{}</body></html>", html_escape(&scenario), eno, html_escape(&tester), html_escape(&created), if result=="PASS" {"ok"} else {"fail"}, result, method, html_escape(&url), html_escape(&params), html_escape(&redact_json_headers(&headers)), html_escape(&body), status, ms, size, html_escape(&rb), html_escape(&validation_text), if attachments_html.is_empty() {"<p>No attachments.</p>".to_string()} else {attachments_html});
+    fs::write(&path, html).map_err(|e| e.to_string())?;
+    Ok(path)
+}
 
 fn redact_json_headers(s:&str)->String{let v:Value=serde_json::from_str(s).unwrap_or(json!({}));if let Some(o)=v.as_object(){let m=o.iter().map(|(k,v)|(k.clone(),Value::String(mask(k,v.as_str().unwrap_or(&v.to_string()))))).collect::<serde_json::Map<_,_>>();return serde_json::to_string_pretty(&m).unwrap_or_default()}s.into()}
-fn validation_html(c:&Connection,id:i64)->String{let mut st=c.prepare("SELECT target,operator,expected,actual_json,passed FROM validation_results WHERE execution_id=?").unwrap();let mut s=String::new();for r in st.query_map([id],|r|Ok(format!("{} | {} | expected={} | actual={} | {}",r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,if r.get::<_,i64>(4)?!=0{"PASS"}else{"FAIL"}))).unwrap(){if let Ok(x)=r{s.push_str(&x);s.push('\n')}}s}
+fn validation_html(c: &Connection, id: i64) -> String {
+    let mut st = match c.prepare("SELECT target,operator,expected,actual_json,passed FROM validation_results WHERE execution_id=?") {
+        Ok(st) => st, Err(_) => return String::new()
+    };
+    let rows = match st.query_map([id], |r| Ok(format!(
+        "{} | {} | expected={} | actual={} | {}",
+        r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+        r.get::<_, String>(3)?, if r.get::<_, i64>(4)? != 0 { "PASS" } else { "FAIL" }
+    ))) {
+        Ok(rows) => rows, Err(_) => return String::new()
+    };
+    let values: Vec<Result<String, rusqlite::Error>> = rows.collect();
+    let mut s = String::new();
+    for value in values { if let Ok(x) = value { s.push_str(&x); s.push('\n'); } }
+    s
+}
 
 #[tauri::command] fn save_scenario_request(state:State<Db>,scenario_id:i64,request:RequestDef)->Result<(),String>{let c=state.0.lock().unwrap();c.execute("INSERT INTO scenario_requests(scenario_id,method,url,params_json,headers_json,body,auth) VALUES(?,?,?,?,?,?,?) ON CONFLICT(scenario_id) DO UPDATE SET method=excluded.method,url=excluded.url,params_json=excluded.params_json,headers_json=excluded.headers_json,body=excluded.body,auth=excluded.auth",params![scenario_id,request.method,request.url,serde_json::to_string(&request.params).unwrap(),serde_json::to_string(&request.headers).unwrap(),request.body,request.auth]).map_err(|e|e.to_string())?;Ok(())}
-#[tauri::command] fn export_evidence_json(state:State<Db>,execution_id:i64,path:String)->Result<String,String>{let c=state.0.lock().unwrap();let meta=c.query_row("SELECT scenario_id,execution_number,tester,created_at,final_result FROM executions WHERE id=?",[execution_id],|r|Ok(json!({"scenario_id":r.get::<_,i64>(0)?,"execution_number":r.get::<_,i64>(1)?,"tester":r.get::<_,String>(2)?,"created_at":r.get::<_,String>(3)?,"final_result":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?;let req=c.query_row("SELECT method,url,params_json,headers_json,body,auth FROM execution_requests WHERE execution_id=?",[execution_id],|r|Ok(json!({"method":r.get::<_,String>(0)?,"url":r.get::<_,String>(1)?,"parameters":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!([])),"headers":serde_json::from_str::<Value>(&redact_json_headers(&r.get::<_,String>(3)?)).unwrap_or(json!({})),"body":r.get::<_,String>(4)?,"auth":r.get::<_,String>(5)?}))).map_err(|e|e.to_string())?;let resp=c.query_row("SELECT status,headers_json,body,elapsed_ms,size,timestamp,error_type,error FROM execution_responses WHERE execution_id=?",[execution_id],|r|Ok(json!({"status":r.get::<_,i64>(0)?,"headers":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(json!({})),"body":r.get::<_,String>(2)?,"elapsed_ms":r.get::<_,i64>(3)?,"size":r.get::<_,i64>(4)?,"timestamp":r.get::<_,String>(5)?,"error_type":r.get::<_,Option<String>>(6)?,"error":r.get::<_,Option<String>>(7)?}))).map_err(|e|e.to_string())?;let mut st=c.prepare("SELECT target,operator,expected,actual_json,passed FROM validation_results WHERE execution_id=?").map_err(|e|e.to_string())?;let validation:Vec<Value>=st.query_map([execution_id],|r|Ok(json!({"target":r.get::<_,String>(0)?,"operator":r.get::<_,String>(1)?,"expected":r.get::<_,String>(2)?,"actual":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(Value::Null),"passed":r.get::<_,i64>(4)?!=0}))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();let mut ast=c.prepare("SELECT file_name,description,relative_path,size FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e|e.to_string())?;let attachments:Vec<Value>=ast.query_map([meta["scenario_id"].as_i64().unwrap_or(0)],|r|Ok(json!({"file_name":r.get::<_,String>(0)?,"description":r.get::<_,String>(1)?,"relative_path":r.get::<_,String>(2)?,"size":r.get::<_,i64>(3)?}))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();let out=json!({"execution":meta,"request":req,"response":resp,"validation":validation,"attachments":attachments});fs::write(&path,serde_json::to_vec_pretty(&out).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;Ok(path)}
+#[tauri::command]
+fn export_evidence_json(state: State<Db>, execution_id: i64, path: String) -> Result<String, String> {
+    let c = state.0.lock().unwrap();
+    let meta = c.query_row("SELECT scenario_id,execution_number,tester,created_at,final_result FROM executions WHERE id=?", [execution_id], |r| Ok(json!({
+        "scenario_id": r.get::<_, i64>(0)?, "execution_number": r.get::<_, i64>(1)?,
+        "tester": r.get::<_, String>(2)?, "created_at": r.get::<_, String>(3)?, "final_result": r.get::<_, String>(4)?
+    }))).map_err(|e| e.to_string())?;
+    let req = c.query_row("SELECT method,url,params_json,headers_json,body,auth FROM execution_requests WHERE execution_id=?", [execution_id], |r| Ok(json!({
+        "method": r.get::<_, String>(0)?, "url": r.get::<_, String>(1)?,
+        "parameters": serde_json::from_str::<Value>(&r.get::<_, String>(2)?).unwrap_or(json!([])),
+        "headers": serde_json::from_str::<Value>(&redact_json_headers(&r.get::<_, String>(3)?)).unwrap_or(json!({})),
+        "body": r.get::<_, String>(4)?, "auth": r.get::<_, String>(5)?
+    }))).map_err(|e| e.to_string())?;
+    let resp = c.query_row("SELECT status,headers_json,body,elapsed_ms,size,timestamp,error_type,error FROM execution_responses WHERE execution_id=?", [execution_id], |r| Ok(json!({
+        "status": r.get::<_, i64>(0)?, "headers": serde_json::from_str::<Value>(&r.get::<_, String>(1)?).unwrap_or(json!({})),
+        "body": r.get::<_, String>(2)?, "elapsed_ms": r.get::<_, i64>(3)?, "size": r.get::<_, i64>(4)?,
+        "timestamp": r.get::<_, String>(5)?, "error_type": r.get::<_, Option<String>>(6)?, "error": r.get::<_, Option<String>>(7)?
+    }))).map_err(|e| e.to_string())?;
+    let mut st = c.prepare("SELECT target,operator,expected,actual_json,passed FROM validation_results WHERE execution_id=?").map_err(|e| e.to_string())?;
+    let validation_rows = st.query_map([execution_id], |r| Ok(json!({
+        "target": r.get::<_, String>(0)?, "operator": r.get::<_, String>(1)?, "expected": r.get::<_, String>(2)?,
+        "actual": serde_json::from_str::<Value>(&r.get::<_, String>(3)?).unwrap_or(Value::Null), "passed": r.get::<_, i64>(4)? != 0
+    }))).map_err(|e| e.to_string())?;
+    let validation: Vec<Value> = validation_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    drop(st);
+    let mut ast = c.prepare("SELECT file_name,description,relative_path,size FROM scenario_attachments WHERE scenario_id=? ORDER BY id").map_err(|e| e.to_string())?;
+    let attachment_rows = ast.query_map([meta["scenario_id"].as_i64().unwrap_or(0)], |r| Ok(json!({
+        "file_name": r.get::<_, String>(0)?, "description": r.get::<_, String>(1)?,
+        "relative_path": r.get::<_, String>(2)?, "size": r.get::<_, i64>(3)?
+    }))).map_err(|e| e.to_string())?;
+    let attachments: Vec<Value> = attachment_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    drop(ast);
+    let out = json!({"execution": meta, "request": req, "response": resp, "validation": validation, "attachments": attachments});
+    fs::write(&path, serde_json::to_vec_pretty(&out).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run(){tauri::Builder::default().plugin(tauri_plugin_dialog::init()).setup(|app|{let c=db(app.handle())?;app.manage(Db(Mutex::new(c)));Ok(())}).invoke_handler(tauri::generate_handler![list_projects,create_project,list_scenarios,get_scenario,inspect_excel,import_excel,execute_request,validate_response,record_execution,list_executions,export_evidence,save_scenario_request,export_evidence_json,add_attachment,list_attachments,update_attachment_description,remove_attachment]).run(tauri::generate_context!()).expect("error while running tauri application");}
