@@ -13,6 +13,10 @@ const methods=['GET','POST','PUT','PATCH','DELETE'];
 const ops=['equals','not equal','contains','not contains','starts with','ends with','exists','not exists','null','not null','empty','not empty','greater','greater or equal','less','less or equal','regex','type is'];
 const mask=(k:string,v:string)=>/authorization|cookie|set-cookie|api[-_]?key|token|password|secret/i.test(k)?'********':v;
 
+function normalizeHeaderName(value:string){
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function toJsonTableRows(value:any): Array<{key:string; value:string; type:string}> {
   if (value === null || value === undefined) return [{key:'value', value: String(value ?? 'null'), type:'null'}];
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -85,6 +89,7 @@ function App(){
   const [execs,setExecs]=useState<any[]>([]);
   const [attachments,setAttachments]=useState<Attachment[]>([]);
   const [selectedAttachmentIds,setSelectedAttachmentIds]=useState<number[]>([]);
+  const [compareRows,setCompareRows]=useState<any[]>([]);
 
   const filtered = useMemo(() => scenarios.filter(s => `${s.scenario_id} ${s.name}`.toLowerCase().includes(query.toLowerCase())), [scenarios, query]);
 
@@ -132,29 +137,12 @@ function App(){
 
   useEffect(()=>{load()},[]);
 
-  function addParam(){
-    setParams([...params,{enabled:true,key:'',value:'',kind:'String',description:''}]);
-  }
-
-  function removeParam(index:number){
-    setParams((current) => current.filter((_, i) => i !== index));
-  }
-
-  function addHeader(){
-    setHeaders([...headers,{enabled:true,key:'',value:''}]);
-  }
-
-  function removeHeader(index:number){
-    setHeaders((current) => current.filter((_, i) => i !== index));
-  }
-
-  function addRule(){
-    setRules([...rules,{id:Date.now(),target:'body.status',operator:'equals',expected:'200',enabled:true}]);
-  }
-
-  function removeRule(index:number){
-    setRules((current) => current.filter((_, i) => i !== index));
-  }
+  function addParam(){ setParams([...params,{enabled:true,key:'',value:'',kind:'String',description:''}]); }
+  function removeParam(index:number){ setParams((current) => current.filter((_, i) => i !== index)); }
+  function addHeader(){ setHeaders([...headers,{enabled:true,key:'',value:''}]); }
+  function removeHeader(index:number){ setHeaders((current) => current.filter((_, i) => i !== index)); }
+  function addRule(){ setRules([...rules,{id:Date.now(),target:'body.status',operator:'equals',expected:'200',enabled:true}]); }
+  function removeRule(index:number){ setRules((current) => current.filter((_, i) => i !== index)); }
 
   async function send(){
     if (!selected) return;
@@ -166,10 +154,23 @@ function App(){
       });
       setResponse(r);
       setTab('response');
+
       const vr = await invoke<any>('validate_response', { scenarioId: selected.id, response: r, rules });
       setRules(vr.rules || rules);
-      await invoke('save_scenario_request', { scenarioId: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey } });
-      await invoke('record_execution', { projectId: project.id, scenarioId: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey }, response: r, validation: vr });
+
+      await invoke('save_scenario_request', {
+        scenarioId: selected.id,
+        request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey }
+      });
+
+      await invoke('record_execution', {
+        projectId: project.id,
+        scenarioId: selected.id,
+        request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey },
+        response: r,
+        validation: vr
+      });
+
       setExecs(await invoke<any[]>('list_executions', { scenarioId: selected.id }));
       setMessage(vr.final_result || 'Execution completed');
     } catch (e) {
@@ -196,21 +197,25 @@ function App(){
     try {
       const f = await open({ filters: [{ name: 'Excel', extensions: ['xlsx'] }], multiple: false });
       if (!f || Array.isArray(f)) return;
+
       const result = await invoke<any>('inspect_excel', { path: f });
       const sheet = prompt('Sheet name', result.sheets?.[0] || 'Sheet1');
       if (!sheet) return;
+
       const mapping = {
         scenario_id: prompt('Column for scenario number', 'No') || 'No',
         name: prompt('Column for scenario name', 'Skenario') || 'Skenario',
         test_step: prompt('Column for test step (optional)', 'Test Step') || 'Test Step',
         expected_result: prompt('Column for expected result', 'Expected') || 'Expected'
       };
+
       await invoke('import_excel', {
         projectId: project.id,
         path: f,
         sheet,
         mapping
       });
+
       await loadScenarios(project.id);
       setMessage('Excel imported');
     } catch (e) {
@@ -288,6 +293,16 @@ function App(){
     }
   }
 
+  function buildCompareRows(rows:any[]){
+    if (!rows || !rows.length) return [];
+    return rows.map((row:any, idx:number) => ({
+      no: row.no ?? idx + 1,
+      scenario: row.scenario ?? row.name ?? '',
+      expected: row.expected ?? row.expected_result ?? '',
+      status: row.status ?? 'PENDING'
+    }));
+  }
+
   useEffect(()=>{ if (selected) { invoke<any[]>('list_executions', { scenarioId: selected.id }).then(setExecs).catch(()=>{});} }, [selected]);
 
   useEffect(()=>{
@@ -298,6 +313,16 @@ function App(){
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [selected, response, execs, busy]);
+
+  useEffect(()=>{
+    const rows = scenarios.map((s, idx) => ({
+      no: idx + 1,
+      scenario: s.name,
+      expected: s.expected_result,
+      status: s.status
+    }));
+    setCompareRows(buildCompareRows(rows));
+  }, [scenarios]);
 
   return (
     <div className="app">
@@ -515,6 +540,30 @@ function App(){
             </div>
           )}
 
+          <div className="comparePanel">
+            <h3>Scenario Comparison</h3>
+            <table className="compareTable">
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Scenario Name</th>
+                  <th>Expected Result</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compareRows.map((row, idx) => (
+                  <tr key={`${row.no}-${idx}`}>
+                    <td>{row.no}</td>
+                    <td>{row.scenario}</td>
+                    <td>{row.expected}</td>
+                    <td>{row.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
           {message && <div className="toast">{message}</div>}
         </section>
       </main>
@@ -525,3 +574,4 @@ function App(){
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
+
