@@ -27,20 +27,26 @@ jobs:
       - name: Build Tauri
         run: npm run tauri build
 
-      - name: Verify bundle output
+      - name: Prepare Portable Package
         shell: pwsh
         run: |
-          Write-Host "=== NSIS ==="
-          Get-ChildItem ".\src-tauri\target\release\bundle\nsis" -File
+          New-Item -ItemType Directory -Force -Path portable
 
-          Write-Host "=== MSI ==="
-          Get-ChildItem ".\src-tauri\target\release\bundle\msi" -File
+          Copy-Item `
+            ".\src-tauri\target\release\api_uat_workspace.exe" `
+            ".\portable\API-UAT-Workspace.exe"
 
-      - name: Upload Windows installers
+      - name: Create Portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path ".\portable\*" `
+            -DestinationPath ".\API-UAT-Workspace-Portable.zip" `
+            -Force
+
+      - name: Upload Portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: API-UAT-Workspace-Windows
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+          name: API-UAT-Workspace-Portable
+          path: API-UAT-Workspace-Portable.zip
           if-no-files-found: error
