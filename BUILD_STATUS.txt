@@ -1,0 +1,29 @@
+API UAT Workspace — Phase 1 build status
+Generated/updated: 2026-09-22
+
+SOURCE PACKAGE
+- Complete Tauri 2 / Rust / React / TypeScript project is present.
+- SQLite schema and local attachment storage are implemented.
+- Scenario attachments support multiple files, per-file descriptions, remove/update operations, and HTML evidence embedding.
+- No Node.js runtime or localhost backend is used by the application.
+
+VALIDATION LIMITATION
+- The current execution environment does not contain Rust/Cargo/rustc, so a native Windows Tauri build could not be compiled here.
+- Node.js/npm are present, but a full dependency installation/build was not rerun because the requested deliverable is a portable Windows application and the prior Phase 1 build already recorded the Linux build limitation.
+- Therefore this package must NOT be represented as containing a successfully compiled Windows EXE.
+
+WINDOWS BUILD
+On a Windows development/build machine with Rust stable, Windows build tools, and Node.js/npm for build time:
+  npm install
+  npm run tauri build
+
+The generated executable can then be placed in a portable directory with:
+  API-UAT-Workspace.exe
+  README.txt
+  data/
+  exports/
+
+Runtime does not require Node.js/npm, a local server, Python, Java, Docker, or an application backend.
+
+WEBVIEW2
+Tauri Windows UI uses WebView2. Whether the target machine already has the required WebView2 runtime, or a specific Tauri WebView2 distribution strategy is used, must be verified on the final Windows packaging machine. This Linux environment did not produce or test the Windows EXE.

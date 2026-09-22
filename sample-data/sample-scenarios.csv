@@ -1,0 +1,3 @@
+Scenario ID,Scenario,Test Step,Expected Result
+API-001,Get customer detail,Valid customer ID returns customer,HTTP 200 and SUCCESS with customerId
+API-002,Get customer detail invalid,Invalid customer ID returns business error,HTTP 400 and expected error
