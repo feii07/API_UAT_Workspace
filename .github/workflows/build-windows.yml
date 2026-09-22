@@ -32,5 +32,6 @@ jobs:
         with:
           name: API-UAT-Workspace-Windows
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            */.exe
+            */.msi
+          if-no-files-found: error
