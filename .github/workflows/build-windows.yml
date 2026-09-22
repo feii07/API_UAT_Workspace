@@ -27,13 +27,42 @@ jobs:
       - name: Build Tauri
         run: npm run tauri build
 
+      - name: Find Windows executable
+        shell: pwsh
+        run: |
+          Write-Host "=== EXE FILES ==="
+
+          Get-ChildItem ".\src-tauri\target\release" -Recurse -File -Filter "*.exe" |
+            ForEach-Object {
+              Write-Host $_.FullName
+            }
+
       - name: Prepare Portable Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path portable
+          New-Item -ItemType Directory -Force -Path ".\portable"
+
+          $exe = Get-ChildItem `
+            ".\src-tauri\target\release" `
+            -Recurse `
+            -File `
+            -Filter "*.exe" |
+            Where-Object {
+              $_.FullName -notmatch "\\deps\\" -and
+              $_.FullName -notmatch "\\build\\"
+            } |
+            Select-Object -First 1
+
+          if ($null -eq $exe) {
+            Write-Host "ERROR: No application EXE found."
+            exit 1
+          }
+
+          Write-Host "Using application:"
+          Write-Host $exe.FullName
 
           Copy-Item `
-            ".\src-tauri\target\release\api_uat_workspace.exe" `
+            $exe.FullName `
             ".\portable\API-UAT-Workspace.exe"
 
       - name: Create Portable ZIP
