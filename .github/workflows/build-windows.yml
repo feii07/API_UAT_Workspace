@@ -27,6 +27,25 @@ jobs:
       - name: Build Tauri
         run: npm run tauri build
 
+      - name: Debug build output
+        shell: pwsh
+        run: |
+          Write-Host "=== TARGET DIRECTORY ==="
+          if (Test-Path "src-tauri/target") {
+            Get-ChildItem "src-tauri/target" -Recurse -File |
+              Select-Object FullName
+          } else {
+            Write-Host "src-tauri/target DOES NOT EXIST"
+          }
+      
+          Write-Host "=== ALL EXE ==="
+          Get-ChildItem . -Recurse -File -Filter "*.exe" |
+            Select-Object FullName
+      
+          Write-Host "=== ALL MSI ==="
+          Get-ChildItem . -Recurse -File -Filter "*.msi" |
+            Select-Object FullName
+      
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
