@@ -30,27 +30,30 @@ jobs:
       - name: Debug build output
         shell: pwsh
         run: |
-          Write-Host "=== TARGET DIRECTORY ==="
-          if (Test-Path "src-tauri/target") {
-            Get-ChildItem "src-tauri/target" -Recurse -File |
-              Select-Object FullName
+          Write-Host "=== CURRENT DIRECTORY ==="
+          Get-Location
+      
+          Write-Host "=== ALL EXE FILES ==="
+          Get-ChildItem -Path . -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host $_.FullName }
+      
+          Write-Host "=== ALL MSI FILES ==="
+          Get-ChildItem -Path . -Recurse -File -Filter "*.msi" -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host $_.FullName }
+      
+          Write-Host "=== SRC-TAURI TARGET ==="
+          if (Test-Path ".\src-tauri\target") {
+            Get-ChildItem ".\src-tauri\target" -Recurse -File |
+              ForEach-Object { Write-Host $_.FullName }
           } else {
-            Write-Host "src-tauri/target DOES NOT EXIST"
+            Write-Host "src-tauri\target NOT FOUND"
           }
       
-          Write-Host "=== ALL EXE ==="
-          Get-ChildItem . -Recurse -File -Filter "*.exe" |
-            Select-Object FullName
-      
-          Write-Host "=== ALL MSI ==="
-          Get-ChildItem . -Recurse -File -Filter "*.msi" |
-            Select-Object FullName
-      
-      - name: Upload Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: API-UAT-Workspace-Windows
-          path: |
-            */.exe
-            */.msi
-          if-no-files-found: error
+      # - name: Upload Windows build
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: API-UAT-Workspace-Windows
+      #     path: |
+      #       */.exe
+      #       */.msi
+      #     if-no-files-found: error
