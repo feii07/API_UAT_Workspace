@@ -114,7 +114,7 @@ function App(){
     setAttachments([]);
     setSelectedAttachmentIds([]);
     try {
-      const d = await invoke<any>('get_scenario', { scenario_id: s.id });
+      const d = await invoke<any>('get_scenario', { scenarioId: s.id });
       setRules(d.rules || []);
       const req = d.request || {};
       setMethod(req.method || 'GET');
@@ -123,7 +123,7 @@ function App(){
       setHeaders(req.headers || []);
       setBody(req.body || '');
       setAuth(req.auth || 'No Auth');
-      const att = await invoke<Attachment[]>('list_attachments', { scenario_id: s.id });
+      const att = await invoke<Attachment[]>('list_attachments', { scenarioId: s.id });
       setAttachments(att || []);
     } catch (e) {
       setMessage(String(e));
@@ -166,11 +166,11 @@ function App(){
       });
       setResponse(r);
       setTab('response');
-      const vr = await invoke<any>('validate_response', { scenario_id: selected.id, response: r, rules });
+      const vr = await invoke<any>('validate_response', { scenarioId: selected.id, response: r, rules });
       setRules(vr.rules || rules);
-      await invoke('save_scenario_request', { scenario_id: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey } });
-      await invoke('record_execution', { project_id: project.id, scenario_id: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey }, response: r, validation: vr });
-      setExecs(await invoke<any[]>('list_executions', { scenario_id: selected.id }));
+      await invoke('save_scenario_request', { scenarioId: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey } });
+      await invoke('record_execution', { projectId: project.id, scenarioId: selected.id, request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey }, response: r, validation: vr });
+      setExecs(await invoke<any[]>('list_executions', { scenarioId: selected.id }));
       setMessage(vr.final_result || 'Execution completed');
     } catch (e) {
       setMessage(String(e));
@@ -205,7 +205,12 @@ function App(){
         test_step: prompt('Column for test step (optional)', 'Test Step') || 'Test Step',
         expected_result: prompt('Column for expected result', 'Expected') || 'Expected'
       };
-      await invoke('import_excel', { project_id: project.id, path: f, sheet, mapping });
+      await invoke('import_excel', {
+        projectId: project.id,
+        path: f,
+        sheet,
+        mapping
+      });
       await loadScenarios(project.id);
       setMessage('Excel imported');
     } catch (e) {
@@ -221,9 +226,9 @@ function App(){
       const files = Array.isArray(f) ? f : [f];
       for (const path of files) {
         const description = prompt(`Description for ${path.split(/[\\/]/).pop() || 'attachment'}`, 'Attachment for UAT evidence') || 'Attachment for UAT evidence';
-        await invoke('add_attachment', { scenario_id: selected.id, path, description });
+        await invoke('add_attachment', { scenarioId: selected.id, path, description });
       }
-      const refreshed = await invoke<Attachment[]>('list_attachments', { scenario_id: selected.id });
+      const refreshed = await invoke<Attachment[]>('list_attachments', { scenarioId: selected.id });
       setAttachments(refreshed || []);
       setMessage(`${files.length} attachment(s) added`);
     } catch (e) {
@@ -276,14 +281,14 @@ function App(){
     try {
       const p = await save({ defaultPath: `${selected.scenario_id}-evidence.html`, filters: [{ name: 'HTML', extensions: ['html'] }] });
       if (!p) return;
-      await invoke('export_evidence', { execution_id: execs[0]?.id || 0, path: p });
+      await invoke('export_evidence', { executionId: execs[0]?.id || 0, path: p });
       setMessage('Evidence exported');
     } catch (e) {
       setMessage(String(e));
     }
   }
 
-  useEffect(()=>{ if (selected) { invoke<any[]>('list_executions', { scenario_id: selected.id }).then(setExecs).catch(()=>{});} }, [selected]);
+  useEffect(()=>{ if (selected) { invoke<any[]>('list_executions', { scenarioId: selected.id }).then(setExecs).catch(()=>{});} }, [selected]);
 
   useEffect(()=>{
     const h = (e:KeyboardEvent) => {
