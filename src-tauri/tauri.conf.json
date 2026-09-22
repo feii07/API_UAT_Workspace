@@ -23,8 +23,8 @@
       "csp": null
     }
   },
-  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"]
   }
+}
