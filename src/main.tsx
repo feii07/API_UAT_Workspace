@@ -50,6 +50,22 @@ const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 const ops = ['equals', 'not equal', 'contains', 'not contains', 'starts with', 'ends with', 'exists', 'not exists', 'null', 'not null', 'empty', 'not empty', 'greater', 'greater or equal', 'less', 'less or equal', 'regex', 'type is'];
 const mask = (k: string, v: string) => /authorization|cookie|set-cookie|api[-_]?key|token|password|secret/i.test(k) ? '********' : v;
 
+function buildRequestUrl(rawUrl: string, requestParams: any[]) {
+  try {
+    const parsed = new URL(rawUrl);
+    requestParams
+      .filter((param) => param?.enabled && String(param?.key ?? '').trim())
+      .forEach((param) => {
+        const key = String(param.key).trim();
+        const value = String(param.value ?? '');
+        parsed.searchParams.set(key, value);
+      });
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function parseExcelNo(no: string) {
   const s = (no || '').trim();
   if (!s) return { kind: 'unknown', raw: s };
@@ -223,9 +239,25 @@ function App() {
     setBusy(true);
     setMessage('');
     try {
+      const requestUrl = buildRequestUrl(url, params);
+      const request = {
+        method,
+        url: requestUrl,
+        params,
+        headers,
+        body,
+        auth,
+        token,
+        basicUser,
+        basicPass,
+        apiKey,
+      };
+
       const r = await invoke<Resp>('execute_request', {
-        request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey, mock },
+        request,
+        mock,
       });
+
       setResponse(r);
       setTab('response');
 
@@ -234,19 +266,19 @@ function App() {
 
       await invoke('save_scenario_request', {
         scenarioId: selected.id,
-        request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey },
+        request,
       });
 
       await invoke('record_execution', {
         projectId: project.id,
         scenarioId: selected.id,
-        request: { method, url, params, headers, body, auth, token, basicUser, basicPass, apiKey },
+        request,
         response: r,
         validation: vr,
       });
 
       setExecs(await invoke<any[]>('list_executions', { scenarioId: selected.id }));
-      setMessage(vr.final_result || 'Execution completed');
+      setMessage(vr.final_result || 'Request-response-validation saved');
     } catch (e) {
       setMessage(String(e));
     } finally {
@@ -681,5 +713,3 @@ function App() {
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
-
-
